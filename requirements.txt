@@ -1,0 +1,29 @@
+# ArXiv AI Agent V2 依赖
+
+# 核心依赖
+openai>=1.0.0
+arxiv>=2.0.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+loguru>=0.7.0
+
+# 新增：配置和数据验证
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# 新增：数据库
+sqlalchemy>=2.0.0
+
+# 新增：重试机制
+tenacity>=8.0.0
+
+# 新增：定时任务
+apscheduler>=3.10.0
+
+# 新增：Web 界面
+streamlit>=1.28.0
+plotly>=5.18.0
+pandas>=2.0.0
+
+# 工具
+jinja2>=3.0.0

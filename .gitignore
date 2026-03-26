@@ -24,7 +24,10 @@ wheels/
 venv/
 ENV/
 env/
-.venv
+.venv/
+
+# Generated output
+output/
 
 # Environment Variables
 .env
@@ -41,7 +44,9 @@ env/
 *.log
 logs/
 
-# Database - 保留示例数据，忽略大文件
+# Database
+database/arxiv_papers.db
+# 保留示例数据，忽略大文件
 database/*.json
 !database/index.json
 database/*.html

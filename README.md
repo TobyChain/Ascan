@@ -19,19 +19,37 @@
 
 ```
 arXiv-ai-Agent/
-├── arxiv_daily.py         # 主程序（自动化抓取）
-├── tools/                 # 工具模块
-│   ├── call_llm.py        # LLM 翻译与分析
-│   ├── call_jina.py       # Jina Reader 网页解析
-│   └── call_feishu_card.py # 飞书卡片推送
-├── arxiv_subjects.py      # ArXiv 分类配置
-├── feishu_drive_upload.py # 飞书云空间上传
-├── md_report.py           # Markdown 日报生成
-├── database/              # 数据存储
-├── logs/                  # 日志文件
-├── .env.example           # 环境变量示例
-├── .env                   # 环境变量（需手动创建）
-└── README.md
+├── main.py                    # 主程序入口
+├── arxiv_subjects.py          # ArXiv 分类配置
+├── requirements.txt           # Python 依赖
+├── .env.example               # 环境变量示例
+├── .env                       # 环境变量（需手动创建）
+├── CHANGELOG.md               # 版本变更记录
+│
+├── src/                       # 源代码
+│   ├── config/                # 配置管理
+│   ├── models/                # 数据模型
+│   ├── core/                  # 核心业务逻辑（评分、调度、查询）
+│   ├── pipeline/              # 数据处理流水线
+│   ├── tools/                 # 外部服务调用（LLM、Jina、飞书）
+│   ├── database/              # 数据层（ORM 模型、仓储）
+│   └── utils/                 # 通用工具
+│
+├── web/                       # Streamlit Web 界面
+│   └── app.py
+│
+├── scripts/                   # 可执行脚本
+│   ├── run.sh                 # 启动脚本
+│   └── dev/                   # 开发工具脚本
+│
+├── docs/                      # 文档
+│   ├── guides/                # 使用指南
+│   └── archive/               # 历史文档归档
+│
+├── output/                    # 生成的 Markdown 日报
+├── database/                  # 数据库文件
+│   └── arxiv_papers.db
+└── logs/                      # 日志文件
 ```
 
 ## 快速开始
@@ -85,10 +103,10 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 ```bash
 # 使用 uv 执行每日论文抓取和处理
-uv run python arxiv_daily.py
+uv run python main.py
 
 # 或使用提供的快捷脚本
-./run.sh
+bash scripts/run.sh
 ```
 
 第一次运行可能会比较慢（取决于当天的论文数量），耐心等待即可。运行完成后，你应该能在飞书群里收到推送消息。
@@ -97,7 +115,7 @@ uv run python arxiv_daily.py
 
 项目采用模块化设计，各个功能独立封装，方便二次开发和定制。
 
-### tools/call_llm.py - LLM 调用
+### src/tools/call_llm.py - LLM 调用
 
 负责调用大模型 API 进行论文分析。这是整个项目的核心，它会：
 - 翻译英文摘要为中文
@@ -107,11 +125,11 @@ uv run python arxiv_daily.py
 
 **自定义推荐标准的话，重点改这个文件**（详见下文）。
 
-### tools/call_jina.py - 网页解析
+### src/tools/call_jina.py - 网页解析
 
 使用 Jina Reader API 抓取 ArXiv 列表页面。Jina Reader 可以把任何网页转成干净的 Markdown，非常适合给 LLM 做输入。
 
-### tools/call_feishu_card.py - 飞书推送
+### src/tools/call_feishu_card.py - 飞书推送
 
 负责将日报以交互式卡片的形式推送到飞书群。卡片格式美观，带按钮链接，可以直接跳转到云文档查看完整日报。
 
@@ -133,7 +151,7 @@ uv run python arxiv_daily.py
 crontab -e
 
 # 添加以下内容（每天早上 9:00 执行）
-0 9 * * * cd /path/to/arxiv-ai-agent && uv run python arxiv_daily.py >> /path/to/arxiv-ai-agent/logs/cron.log 2>&1
+0 9 * * * cd /path/to/arxiv-ai-agent && uv run python main.py >> /path/to/arxiv-ai-agent/logs/cron.log 2>&1
 ```
 
 **注意事项**：
@@ -168,7 +186,7 @@ crontab -e
 - 特别关注医学 LLM 的进展
 - 优先推荐来自头部厂商（Google、Meta、OpenAI 等）的研究
 
-**如果你想修改推荐标准**，只需要编辑 `tools/call_llm.py` 文件中的 `translate_abstract` 方法，找到第 40-41 行的 prompt：
+**如果你想修改推荐标准**，只需要编辑 `src/tools/call_llm.py` 文件中的 `translate_abstract` 方法，找到第 40-41 行的 prompt：
 
 ```python
 f"5. 推荐程度：作为一名大模型算法工程师,请给出推荐程度（极度推荐、很推荐、推荐、一般推荐、不推荐）。\n"
