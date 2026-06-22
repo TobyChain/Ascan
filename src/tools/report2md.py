@@ -1,86 +1,84 @@
-"""md_report.py
+"""arXiv report renderer.
 
-把 arxiv_daily 处理结果渲染为简洁 Markdown。
+Render selected arXiv papers as HTML fragments for the unified daily report.
 """
 
 from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from src.utils.html import escape_html as _escape_html
+
 
 def _safe_join(items: List[str]) -> str:
-    return ", ".join([i for i in items if i])
+    return ", ".join([str(item) for item in items if item])
 
 
-def _escape_html(text: str) -> str:
-    return (
-        (text or "")
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
-        .replace("'", "&#39;")
-    )
+def _link(url: str, label: str) -> str:
+    if not url:
+        return ""
+    escaped_url = _escape_html(url)
+    escaped_label = _escape_html(label)
+    return f'<a href="{escaped_url}" target="_blank" rel="noopener noreferrer">{escaped_label}</a>'
 
 
-def papers_to_markdown(date_str: str, papers: List[Dict[str, Any]]) -> str:
-    lines: List[str] = []
-    # 按照要求，直接以分割线开始，不再保留顶部的总标题和论文数
-    lines.append("---")
+def papers_to_html(date_str: str, papers: List[Dict[str, Any]]) -> str:
+    """Build an HTML fragment for selected arXiv papers."""
+    if not papers:
+        return '<p class="empty-state">今日无 arXiv 精选论文。</p>'
 
-    # 英文到中文的映射
-    sub_topic_map = {
-        "medical_llm": "医学大模型",
-        "moe": "混合专家模型",
-        "lora": "低秩适配",
-        "rag": "检索增强生成",
-        "agent": "智能体系统",
-        "multimodal": "多模态模型",
-        "reasoning": "推理能力",
-        "alignment": "对齐技术",
-        "unknown": "未知",
-        "未知": "未知"
-    }
+    sections: List[str] = [f'<div class="report-list arxiv-list" data-date="{_escape_html(date_str)}">']
 
-    for idx, p in enumerate(papers, start=1):
-        title = (p.get("title") or "").strip()
-        authors = p.get("authors") or []
-        abs_url = p.get("abs_url") or ""
-        pdf_url = p.get("pdf_url") or ""
-        
-        # 转换子主题为中文
-        sub_topic_en = p.get("sub_topic") or "未知"
-        sub_topic = sub_topic_map.get(sub_topic_en, sub_topic_en)
-        
-        recommendation = p.get("recommendation") or "一般推荐"
-        keywords = p.get("keywords") or []
-        trans_abs = (p.get("trans_abs") or "").strip()
+    for index, paper in enumerate(papers, start=1):
+        title = (paper.get("title") or "").strip()
+        authors = paper.get("authors") or []
+        abs_url = paper.get("abs_url") or ""
+        pdf_url = paper.get("pdf_url") or ""
+        keywords = paper.get("keywords") or []
+        one_liner = (paper.get("one_liner") or "").strip()
+        core_recommendation = (paper.get("core_recommendation") or "").strip()
+        translated_abstract = (paper.get("trans_abs") or "").strip()
 
-        lines.append(f"## {idx}. {title}")
-        lines.append("")
+        keyword_tags = "".join(
+            f'<span class="tag">{_escape_html(keyword)}</span>'
+            for keyword in keywords
+            if keyword
+        )
+        links = " · ".join(
+            link for link in [
+                _link(abs_url, "Abstract"),
+                _link(pdf_url, "PDF"),
+            ]
+            if link
+        )
+
+        sections.append('<article class="card paper-card">')
+        sections.append(f'<h3>{index}. {_escape_html(title)}</h3>')
         if authors:
-            lines.append(f"- 作者：{_safe_join(authors)}")
-        lines.append(f"- 研究方向：{sub_topic}")
-        lines.append(f"- 推荐：{recommendation}")
-        if keywords:
-            lines.append(f"- 关键词：{_safe_join(list(map(str, keywords)))}")
-        if abs_url:
-            lines.append(f"- Abstract：{abs_url}")
-        if pdf_url:
-            lines.append(f"- PDF：{pdf_url}")
+            sections.append(f'<p class="meta"><strong>作者：</strong>{_escape_html(_safe_join(authors))}</p>')
+        if keyword_tags:
+            sections.append(f'<div class="tags">{keyword_tags}</div>')
+        if one_liner:
+            sections.append(f'<p><strong>一句话总结：</strong>{_escape_html(one_liner)}</p>')
+        if links:
+            sections.append(f'<p class="links">{links}</p>')
 
-        lines.append("")
-        if trans_abs:
-            lines.append("**中文摘要**")
-            lines.append("")
-            lines.append(trans_abs)
-            lines.append("")
+        sections.append('<section class="summary-block">')
+        sections.append('<h4>中文摘要</h4>')
+        if translated_abstract:
+            sections.append(f'<p>{_escape_html(translated_abstract)}</p>')
         else:
-            # 如果没有中文摘要，使用英文摘要或评分信息
-            lines.append("**中文摘要**")
-            lines.append("")
-            lines.append("*中文摘要生成中...*")
-            lines.append("")
-        lines.append("---")
+            sections.append('<p class="muted">中文摘要生成中...</p>')
+        sections.append('</section>')
 
-    return "\n".join(lines).rstrip() + "\n"
+        if core_recommendation:
+            sections.append(
+                '<p class="recommendation"><strong>核心推荐：</strong>'
+                f'{_escape_html(core_recommendation)}</p>'
+            )
+        sections.append('</article>')
+
+    sections.append('</div>')
+    return "\n".join(sections)
+
+

@@ -27,30 +27,20 @@ class FetchJobConfig:
     description: str = ""
 
 
-# 默认调度配置
-DEFAULT_SCHEDULE = [
-    FetchJobConfig(
-        name="morning_fetch",
-        subjects=["cs.AI"],
-        schedule="0 8 * * *",              # 每天 8:00
-        max_papers=250,
-        description="早间抓取 - 获取凌晨更新的论文"
-    ),
-    FetchJobConfig(
-        name="noon_fetch",
-        subjects=["cs.AI"],
-        schedule="0 14 * * *",             # 每天 14:00
-        max_papers=250,
-        description="午间抓取 - 获取上午更新的论文"
-    ),
-    FetchJobConfig(
-        name="evening_fetch",
-        subjects=["cs.AI", "cs.LG", "cs.CL"],
-        schedule="0 20 * * *",             # 每天 20:00
-        max_papers=300,
-        description="晚间抓取 - 全量更新"
-    ),
-]
+def _build_default_schedule() -> list:
+    from src.config.settings import get_settings
+    subjects = get_settings().arxiv_subjects
+    return [
+        FetchJobConfig(
+            name="morning_fetch",
+            subjects=subjects,
+            schedule="0 8 * * *",
+            max_papers=250,
+            description="早间抓取",
+        ),
+    ]
+
+DEFAULT_SCHEDULE = _build_default_schedule()
 
 
 class ArxivScheduler:
@@ -97,40 +87,32 @@ class ArxivScheduler:
             self._notify_callbacks(job_id, True, event.retval or {})
     
     async def _fetch_task(self, config: FetchJobConfig) -> dict:
-        """实际的抓取任务"""
-        # from arxiv_daily_v2 import run_daily_pipeline  # broken import, removed
-        
-        logger.info(f"开始执行抓取任务: {config.name}")
+        """执行统一日报任务（arXiv + GitHub）"""
+        logger.info(f"开始执行任务: {config.name}")
         start_time = datetime.now()
-        
         try:
-            # 确定日期（如果是早上抓，可能抓昨天的）
-            if "morning" in config.name:
-                target_date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-            else:
-                target_date = datetime.now().strftime("%Y-%m-%d")
-            
-            # 运行流水线
-            # NOTE: run_daily_pipeline was from the removed arxiv_daily_v2 module.
-            # This needs to be replaced with the new pipeline from src.pipeline.
-            raise NotImplementedError("_fetch_task: run_daily_pipeline is no longer available; update this method to use src.pipeline")
-            result = None  # unreachable, kept for type checker
-            
+            from src.config.settings import get_settings
+            settings = get_settings()
+            target_dt = datetime.now() - timedelta(days=settings.arxiv_date_offset_days)
+            weekday = target_dt.weekday()
+            if weekday == 5:
+                target_dt -= timedelta(days=1)
+            elif weekday == 6:
+                target_dt -= timedelta(days=2)
+            date_compact = target_dt.strftime("%Y%m%d")
+
+            from main_daily import run_daily_unified
+            await run_daily_unified(date_compact)
+
             duration = (datetime.now() - start_time).total_seconds()
-            
             return {
                 "job_name": config.name,
-                "success": result.error_message is None,
-                "date": target_date,
-                "subjects": config.subjects,
-                "total_papers": result.total_papers,
-                "processed": result.processed_count,
+                "success": True,
+                "date": date_compact,
                 "duration": duration,
-                "error": result.error_message
             }
-            
         except Exception as e:
-            logger.exception(f"抓取任务 {config.name} 异常: {e}")
+            logger.exception(f"任务 {config.name} 异常: {e}")
             return {
                 "job_name": config.name,
                 "success": False,
@@ -322,15 +304,16 @@ async def main():
         print(f"\n执行结果: {result}")
         return
     
-    if args.start or True:  # 默认启动
+    if args.start:
         scheduler.start()
-        
-        # 保持运行
+
         try:
             while True:
                 await asyncio.sleep(1)
         except KeyboardInterrupt:
             scheduler.stop()
+    else:
+        parser.print_help()
 
 
 if __name__ == "__main__":

@@ -6,8 +6,8 @@ from datetime import datetime
 from typing import Optional, List
 
 from sqlalchemy import (
-    Column, Integer, String, Text, DateTime, 
-    Float, ForeignKey, JSON, create_engine, Index
+    Column, Integer, String, Text, DateTime,
+    Float, ForeignKey, JSON, Boolean, create_engine, Index
 )
 from sqlalchemy.orm import relationship, declarative_base
 from sqlalchemy.sql import func
@@ -41,6 +41,8 @@ class PaperDB(Base):
     keywords = Column(JSON, default=list)
     sub_topic = Column(String(100), index=True, default="未知")
     recommendation = Column(String(20), index=True, default="一般推荐")
+    one_liner = Column(Text, nullable=True)
+    core_recommendation = Column(Text, nullable=True)
     
     # 处理状态
     status = Column(String(20), default="pending")  # pending, processing, completed, failed
@@ -82,6 +84,8 @@ class PaperDB(Base):
             "keywords": self.keywords or [],
             "sub_topic": self.sub_topic,
             "recommendation": self.recommendation,
+            "one_liner": self.one_liner,
+            "core_recommendation": self.core_recommendation,
             "status": self.status,
             "processed_at": self.processed_at.isoformat() if self.processed_at else None,
         }
@@ -145,38 +149,124 @@ class ProcessingLogDB(Base):
         return f"<ProcessingLog({self.date} {self.stage}: {self.status})>"
 
 
-class UserFeedbackDB(Base):
-    """用户反馈表 - 用于优化推荐"""
-    __tablename__ = "user_feedback"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    paper_id = Column(Integer, ForeignKey("papers.id"), nullable=False)
-    rating = Column(Integer, nullable=True)  # 1-5 评分
-    is_interested = Column(Integer, default=0)  # 0/1
-    is_read = Column(Integer, default=0)  # 0/1
-    notes = Column(Text, nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
-    
-    # 关联
-    paper = relationship("PaperDB")
-    
-    def __repr__(self):
-        return f"<UserFeedback(paper={self.paper_id}, rating={self.rating})>"
+class RepoDB(Base):
+    """GitHub 仓库记录表"""
+    __tablename__ = "github_repos"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    full_name = Column(String(200), unique=True, nullable=False, index=True)
+    owner = Column(String(100), nullable=False)
+    name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+    stars = Column(Integer, default=0)
+    forks = Column(Integer, default=0)
+    language = Column(String(50), nullable=True)
+    topics = Column(JSON, default=list)
+    url = Column(String(500), nullable=False)
+    pushed_at = Column(String(30), nullable=True)
+    repo_created_at = Column(String(30), nullable=True)
+
+    # LLM 分析字段
+    one_liner = Column(String(200), nullable=True)
+    positioning = Column(Text, nullable=True)
+    core_tech = Column(Text, nullable=True)
+    use_cases = Column(Text, nullable=True)
+    comparison = Column(Text, nullable=True)
+    watch_reason = Column(Text, nullable=True)
+    relevance = Column(String(20), nullable=True)
+
+    # 追踪字段
+    first_seen_date = Column(String(10), nullable=True, index=True)   # YYYY-MM-DD
+    last_seen_date = Column(String(10), nullable=True, index=True)    # YYYY-MM-DD
+    seen_count = Column(Integer, default=1)
+    stars_history = Column(JSON, default=dict)   # {"2026-04-20": 4200, ...}
+    analyzed = Column(Boolean, default=False)
+
+    created_at_ts = Column(DateTime, default=datetime.utcnow)
+    updated_at_ts = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self) -> dict:
+        return {
+            "full_name": self.full_name,
+            "owner": self.owner,
+            "name": self.name,
+            "description": self.description,
+            "stars": self.stars,
+            "forks": self.forks,
+            "language": self.language,
+            "topics": self.topics or [],
+            "url": self.url,
+            "pushed_at": self.pushed_at,
+            "one_liner": self.one_liner,
+            "positioning": self.positioning,
+            "core_tech": self.core_tech,
+            "use_cases": self.use_cases,
+            "comparison": self.comparison,
+            "watch_reason": self.watch_reason,
+            "relevance": self.relevance,
+            "first_seen_date": self.first_seen_date,
+            "last_seen_date": self.last_seen_date,
+            "seen_count": self.seen_count,
+            "stars_history": self.stars_history or {},
+        }
 
 
-class ArxivSubjectStatDB(Base):
-    """ArXiv 主题统计表"""
-    __tablename__ = "arxiv_subject_stats"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    subject_code = Column(String(20), index=True, nullable=False)  # cs.AI
-    date = Column(String(10), index=True, nullable=False)
-    paper_count = Column(Integer, default=0)
-    fetched_count = Column(Integer, default=0)
-    processed_count = Column(Integer, default=0)
-    failed_count = Column(Integer, default=0)
-    created_at = Column(DateTime, server_default=func.now())
-    
-    __table_args__ = (
-        Index('idx_subject_date', 'subject_code', 'date', unique=True),
-    )
+class OfficialItemDB(Base):
+    """官方动态跟踪（Anthropic/OpenAI）"""
+    __tablename__ = "official_items"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source = Column(String(30), nullable=False, index=True)   # anthropic/openai
+    slug = Column(String(300), unique=True, nullable=False, index=True)
+    url = Column(String(500), nullable=False)
+    title = Column(Text, nullable=True)
+    date = Column(String(30), nullable=True)
+    category = Column(String(100), nullable=True)              # Alignment/Interpretability 等
+    item_type = Column(String(20), default="article")          # article/commit
+    summary = Column(Text, nullable=True)                      # 首段/commit message
+    content = Column(Text, nullable=True)                      # 全文截取前2000字
+
+    # LLM 分析
+    one_liner = Column(String(200), nullable=True)
+    summary_cn = Column(Text, nullable=True)
+    core_insight = Column(Text, nullable=True)
+    ecommerce_connection = Column(Text, nullable=True)
+    relevance = Column(String(20), nullable=True)
+
+    # 增量追踪
+    sitemap_lastmod = Column(String(30), nullable=True)        # sitemap lastmod 或 commit sha
+    first_seen_date = Column(String(10), nullable=True, index=True)
+    last_seen_date = Column(String(10), nullable=True, index=True)
+    analyzed = Column(Boolean, default=False)
+
+    created_at_ts = Column(DateTime, default=datetime.utcnow)
+    updated_at_ts = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class BlogPostDB(Base):
+    """独立博客订阅（RSS）"""
+    __tablename__ = "blog_posts"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source = Column(String(30), nullable=False, index=True)    # ruanyifeng/sebastian/lilianweng
+    slug = Column(String(300), unique=True, nullable=False, index=True)
+    url = Column(String(500), nullable=False)
+    title = Column(Text, nullable=True)
+    date = Column(String(30), nullable=True)                   # YYYY-MM-DD
+    source_label = Column(String(50), nullable=True)           # 中文如"阮一峰周刊"
+    summary = Column(Text, nullable=True)
+    content = Column(Text, nullable=True)                      # 全文截取前2000字
+
+    # LLM 分析
+    one_liner = Column(String(200), nullable=True)
+    summary_cn = Column(Text, nullable=True)
+    ecommerce_connection = Column(Text, nullable=True)
+    relevance = Column(String(20), nullable=True)
+
+    # 增量追踪
+    first_seen_date = Column(String(10), nullable=True, index=True)
+    last_seen_date = Column(String(10), nullable=True, index=True)
+    analyzed = Column(Boolean, default=False)
+
+    created_at_ts = Column(DateTime, default=datetime.utcnow)
+    updated_at_ts = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

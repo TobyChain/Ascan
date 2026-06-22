@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from loguru import logger
 
 from src.database.connection import get_db_session
-from src.database.models import PaperDB, DailyReportDB, UserFeedbackDB
+from src.database.models import PaperDB, DailyReportDB
 from src.database.repositories import PaperRepository
 from src.core.scoring import ResearchDirection
 
@@ -103,23 +103,14 @@ class PaperQueryEngine:
         # 最低得分（假设存储在 keywords 或扩展字段中）
         # 这里简化处理，实际应该添加 score 字段
         
-        # 排序：推荐等级 > 日期
-        recommendation_order = {
-            "极度推荐": 0,
-            "很推荐": 1,
-            "推荐": 2,
-            "一般推荐": 3,
-            "不推荐": 4
-        }
-        
-        # 获取结果
+        from src.core.scoring import RECOMMENDATION_ORDER
+
         results = query.order_by(
             desc(PaperDB.published),
         ).limit(limit).all()
-        
-        # 转换并排序
+
         papers = [r.to_dict() for r in results]
-        papers.sort(key=lambda x: recommendation_order.get(x.get("recommendation"), 99))
+        papers.sort(key=lambda x: RECOMMENDATION_ORDER.get(x.get("recommendation"), 0), reverse=True)
         
         return papers
     
@@ -219,27 +210,6 @@ class PaperQueryEngine:
             "top_papers": top_papers
         }
     
-    def add_feedback(self, arxiv_id: str, rating: int, notes: str = "") -> bool:
-        """
-        添加用户反馈
-        
-        Args:
-            arxiv_id: 论文 ID
-            rating: 评分 1-5
-            notes: 备注
-        """
-        try:
-            feedback = UserFeedbackDB(
-                paper_id=arxiv_id,  # 这里应该关联到 papers 表
-                rating=rating,
-                notes=notes
-            )
-            self.db.add(feedback)
-            self.db.commit()
-            return True
-        except Exception as e:
-            logger.error(f"添加反馈失败: {e}")
-            return False
 
 
 class TrendAnalyzer:
@@ -382,17 +352,21 @@ class TrendAnalyzer:
             for kw, count in sorted_keywords
         ]
     
-    def generate_weekly_report(self) -> Dict[str, Any]:
+    def generate_weekly_report(self, end_date: Optional[str] = None) -> Dict[str, Any]:
         """生成周报"""
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=7)
+        if end_date:
+            from datetime import datetime as _dt
+            end_dt = _dt.strptime(end_date.replace("-", ""), "%Y%m%d")
+        else:
+            end_dt = datetime.now()
+        start_dt = end_dt - timedelta(days=7)
         
         query_engine = PaperQueryEngine(self.db)
         
         # 总体统计
         total_papers = (
             self.db.query(PaperDB)
-            .filter(PaperDB.published >= start_date.strftime("%Y-%m-%d"))
+            .filter(PaperDB.published >= start_dt.strftime("%Y-%m-%d"))
             .count()
         )
         
@@ -406,7 +380,7 @@ class TrendAnalyzer:
         emerging = self.get_emerging_keywords(days=7, limit=10)
         
         return {
-            "period": f"{start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}",
+            "period": f"{start_dt.strftime('%Y-%m-%d')} ~ {end_dt.strftime('%Y-%m-%d')}",
             "total_papers": total_papers,
             "hot_directions": hot_directions,
             "top_papers": top_papers,

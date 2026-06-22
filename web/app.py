@@ -465,7 +465,7 @@ def render_sidebar():
                 ]:
                     if count > 0:
                         st.text(f"{rec}: {count}")
-        except:
+        except Exception:
             st.text("数据加载中...")
         
         st.divider()
@@ -617,8 +617,6 @@ def render_home():
         render_paper_card(paper)
 
 
-import html
-
 def render_paper_card(paper):
     """渲染论文卡片 - 现代化设计"""
     # 推荐等级徽章样式
@@ -685,7 +683,7 @@ def render_paper_card(paper):
             if image_url:
                 try:
                     st.image(image_url, caption="论文主图", use_container_width=True)
-                except:
+                except Exception:
                     pass
             
             # 获取摘要（优先中文摘要，否则英文摘要）
@@ -867,7 +865,7 @@ def render_directions():
             db = get_db()
             
             # 方法1: 使用ORM直接查询（最可靠）
-            from database.models import PaperDB
+            from src.database.models import PaperDB
             from sqlalchemy import desc
             
             papers_orm = db.query(PaperDB).filter(

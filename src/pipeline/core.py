@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Callable
+from typing import Any, Dict, List, Optional
 from loguru import logger
 
 
@@ -15,10 +15,10 @@ class Stage(str, Enum):
     """处理阶段枚举"""
     FETCHING = "fetching"           # 获取数据
     PARSING = "parsing"             # 解析数据
+    SCORING = "scoring"             # 多维度评分
     ANALYZING = "analyzing"         # LLM 分析
     GENERATING = "generating"       # 生成报告
     UPLOADING = "uploading"         # 上传文档
-    NOTIFYING = "notifying"         # 发送通知
     COMPLETED = "completed"         # 完成
     FAILED = "failed"               # 失败
 
@@ -43,6 +43,39 @@ class PipelineContext:
     papers: List[Dict] = field(default_factory=list)
     analysis_results: List[Dict] = field(default_factory=list)
     report_url: Optional[str] = None
+
+    # arXiv pipeline 输出
+    selected_ids: List[str] = field(default_factory=list)   # 经评分过滤后的精选论文 ID
+    report_path: Optional[str] = None                       # 统一日报报告本地路径
+
+    # arXiv 报告内容
+    arxiv_html: Optional[str] = None
+    arxiv_markdown: Optional[str] = None  # 兼容旧字段
+    arxiv_md: Optional[str] = None        # 纯 Markdown 片段
+
+    # GitHub Agent 数据
+    github_repos: List[Any] = field(default_factory=list)
+    github_analyses: Dict[str, Any] = field(default_factory=dict)
+    github_analyzed_names: Any = field(default_factory=set)  # set[str] of already-analyzed full_names
+    github_report_path: Optional[str] = None
+    github_report_url: Optional[str] = None
+    github_html: Optional[str] = None
+    github_markdown: Optional[str] = None  # 兼容旧字段
+    github_md: Optional[str] = None        # 纯 Markdown 片段
+
+    # Part 3 官方动态跟踪
+    official_items: List[Any] = field(default_factory=list)
+    official_analyses: Dict[str, Any] = field(default_factory=dict)
+    official_analyzed_slugs: Any = field(default_factory=set)
+    official_html: Optional[str] = None
+    official_md: Optional[str] = None
+
+    # Part 4 独立博客订阅
+    blog_posts: List[Any] = field(default_factory=list)
+    blog_analyses: Dict[str, Any] = field(default_factory=dict)
+    blog_analyzed_slugs: Any = field(default_factory=set)
+    blog_html: Optional[str] = None
+    blog_md: Optional[str] = None
     
     # 状态追踪
     current_stage: Stage = Stage.FETCHING
@@ -142,112 +175,3 @@ class PipelineStage(ABC):
         pass
 
 
-class Pipeline:
-    """流水线管理器"""
-    
-    def __init__(self):
-        self.stages: List[PipelineStage] = []
-        self.progress_callbacks: List[Callable[[PipelineContext], None]] = []
-        self.error_callbacks: List[Callable[[PipelineContext, Exception], None]] = []
-    
-    def add_stage(self, stage: PipelineStage):
-        """添加阶段"""
-        self.stages.append(stage)
-        return self
-    
-    def on_progress(self, callback: Callable[[PipelineContext], None]):
-        """注册进度回调"""
-        self.progress_callbacks.append(callback)
-        return self
-    
-    def on_error(self, callback: Callable[[PipelineContext, Exception], None]):
-        """注册错误回调"""
-        self.error_callbacks.append(callback)
-        return self
-    
-    def _notify_progress(self, context: PipelineContext):
-        """通知进度更新"""
-        for callback in self.progress_callbacks:
-            try:
-                callback(context)
-            except Exception as e:
-                logger.warning(f"进度回调执行失败: {e}")
-    
-    def _notify_error(self, context: PipelineContext, error: Exception):
-        """通知错误"""
-        for callback in self.error_callbacks:
-            try:
-                callback(context, error)
-            except Exception as e:
-                logger.warning(f"错误回调执行失败: {e}")
-    
-    async def execute(self, context: PipelineContext) -> PipelineContext:
-        """执行整个流水线"""
-        logger.info(f"开始执行流水线: {context.date}")
-        
-        try:
-            for stage in self.stages:
-                if not stage.enabled:
-                    context.end_stage(self._get_stage_enum(stage.name), Status.SKIPPED)
-                    continue
-                
-                stage_enum = self._get_stage_enum(stage.name)
-                context.start_stage(stage_enum)
-                self._notify_progress(context)
-                
-                try:
-                    success = await stage.execute(context)
-                    
-                    if success:
-                        context.end_stage(stage_enum, Status.SUCCESS)
-                    else:
-                        context.end_stage(stage_enum, Status.FAILED, "阶段返回失败")
-                        context.error_stage = stage_enum
-                        context.error_message = f"阶段 {stage.name} 执行失败"
-                        
-                        # 尝试回滚
-                        await stage.rollback(context)
-                        break
-                        
-                except Exception as e:
-                    context.end_stage(stage_enum, Status.FAILED, str(e))
-                    context.error_stage = stage_enum
-                    context.error_message = str(e)
-                    
-                    logger.exception(f"阶段 {stage.name} 执行异常: {e}")
-                    self._notify_error(context, e)
-                    
-                    # 尝试回滚
-                    await stage.rollback(context)
-                    break
-                
-                self._notify_progress(context)
-            
-            # 标记完成或失败
-            if context.error_message:
-                context.current_stage = Stage.FAILED
-            else:
-                context.current_stage = Stage.COMPLETED
-            
-            self._notify_progress(context)
-            
-        except Exception as e:
-            logger.exception(f"流水线执行异常: {e}")
-            context.error_message = str(e)
-            context.current_stage = Stage.FAILED
-            self._notify_error(context, e)
-        
-        logger.info(
-            f"流水线执行完成: {context.date} "
-            f"(总耗时: {context.get_total_duration():.2f}s, "
-            f"论文: {context.processed_count}/{context.total_papers})"
-        )
-        
-        return context
-    
-    def _get_stage_enum(self, name: str) -> Stage:
-        """获取阶段枚举"""
-        for stage in Stage:
-            if stage.value == name:
-                return stage
-        raise ValueError(f"未知阶段: {name}")

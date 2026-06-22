@@ -60,3 +60,8 @@ Thumbs.db
 
 
 gitignore/
+
+# 3eye generated files
+.3eye/.ai-touched-files-tmp.json
+.3eye/requirements/*/.ai-touched-files-tmp.json
+.3eye/requirements/*/coverage-result.json

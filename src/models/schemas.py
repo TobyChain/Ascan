@@ -39,6 +39,14 @@ class PaperAnalysis(BaseModel):
         default="一般推荐",
         description="推荐程度"
     )
+    one_liner: Optional[str] = Field(
+        default=None,
+        description="用大白话一句话说清论文解决了什么问题（中文）"
+    )
+    core_recommendation: Optional[str] = Field(
+        default=None,
+        description="对电商AI应用（数字员工/商品推荐/商品巡检/电商客服/智能体框架/意图理解）的启发和可借鉴思路"
+    )
     
     @field_validator('keywords', mode='before')
     @classmethod
@@ -129,33 +137,3 @@ class ArxivPaper(BaseModel):
         return v
 
 
-class DailyReport(BaseModel):
-    """每日报告数据模型"""
-    
-    date: str = Field(..., description="报告日期")
-    papers: List[ArxivPaper] = Field(default=[], description="论文列表")
-    total_count: int = Field(default=0, description="论文总数")
-    highly_recommended: int = Field(default=0, description="高度推荐数量")
-    file_url: Optional[str] = Field(default=None, description="飞书文档链接")
-    created_at: datetime = Field(default_factory=datetime.now, description="创建时间")
-    
-    @field_validator('total_count', mode='before')
-    @classmethod
-    def calculate_total(cls, v, info):
-        """自动计算总数"""
-        if v == 0 and 'papers' in info.data:
-            return len(info.data['papers'])
-        return v
-
-
-class ProcessingState(BaseModel):
-    """处理状态追踪模型"""
-    
-    date: str = Field(..., description="处理日期")
-    stage: Literal[
-        "fetching", "parsing", "analyzing", "generating", "uploading", "completed", "failed"
-    ] = Field(default="fetching", description="当前阶段")
-    progress: int = Field(default=0, ge=0, le=100, description="进度百分比")
-    message: Optional[str] = Field(default=None, description="状态消息")
-    updated_at: datetime = Field(default_factory=datetime.now, description="更新时间")
-    error: Optional[str] = Field(default=None, description="错误信息")

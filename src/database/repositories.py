@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
 from loguru import logger
 
-from src.database.models import PaperDB
+from src.database.models import PaperDB, RepoDB, OfficialItemDB, BlogPostDB
 from src.models.schemas import ArxivPaper, PaperAnalysis
 
 
@@ -60,6 +60,8 @@ class PaperRepository:
                 existing.keywords = paper.analysis.keywords
                 existing.sub_topic = paper.analysis.sub_topic
                 existing.recommendation = paper.analysis.recommendation
+                existing.one_liner = paper.analysis.one_liner
+                existing.core_recommendation = paper.analysis.core_recommendation
             
             self.db.commit()
             self.db.refresh(existing)
@@ -82,6 +84,8 @@ class PaperRepository:
                 keywords=paper.analysis.keywords if paper.analysis else [],
                 sub_topic=paper.analysis.sub_topic if paper.analysis else "未知",
                 recommendation=paper.analysis.recommendation if paper.analysis else "一般推荐",
+                one_liner=paper.analysis.one_liner if paper.analysis else None,
+                core_recommendation=paper.analysis.core_recommendation if paper.analysis else None,
                 status="completed" if paper.analysis else "pending",
                 processed_at=datetime.now() if paper.analysis else None
             )
@@ -186,3 +190,248 @@ class PaperRepository:
             query = query.filter(PaperDB.published == date)
         
         return query.order_by(desc(PaperDB.created_at)).limit(limit).all()
+
+
+class RepoRepository:
+    """GitHub 仓库数据仓库"""
+
+    def __init__(self, session: Session):
+        self.session = session
+
+    def get_by_full_name(self, full_name: str) -> Optional[RepoDB]:
+        return self.session.query(RepoDB).filter_by(full_name=full_name).first()
+
+    def upsert(self, repo, today: str) -> RepoDB:
+        """Insert or update a repo record. Updates star history and seen tracking."""
+        existing = self.get_by_full_name(repo.full_name)
+        if existing:
+            existing.stars = repo.stars
+            existing.forks = repo.forks
+            existing.description = repo.description
+            existing.pushed_at = repo.pushed_at
+            existing.last_seen_date = today
+            existing.seen_count = (existing.seen_count or 0) + 1
+            history = dict(existing.stars_history or {})
+            history[today] = repo.stars
+            existing.stars_history = history
+            existing.updated_at_ts = datetime.now()
+        else:
+            existing = RepoDB(
+                full_name=repo.full_name,
+                owner=repo.owner,
+                name=repo.name,
+                description=repo.description,
+                stars=repo.stars,
+                forks=repo.forks,
+                language=repo.language,
+                topics=repo.topics,
+                url=repo.url,
+                pushed_at=repo.pushed_at,
+                repo_created_at=repo.created_at,
+                first_seen_date=today,
+                last_seen_date=today,
+                seen_count=1,
+                stars_history={today: repo.stars},
+                analyzed=False,
+            )
+            self.session.add(existing)
+        self.session.commit()
+        self.session.refresh(existing)
+        return existing
+
+    def save_analysis(self, full_name: str, analysis) -> None:
+        """Persist LLM analysis fields to an existing RepoDB row."""
+        repo = self.get_by_full_name(full_name)
+        if not repo:
+            return
+        repo.one_liner = analysis.one_liner
+        repo.positioning = analysis.positioning
+        repo.core_tech = analysis.core_tech
+        repo.use_cases = analysis.use_cases
+        repo.comparison = analysis.comparison
+        repo.watch_reason = analysis.watch_reason
+        repo.relevance = analysis.relevance
+        repo.analyzed = True
+        repo.updated_at_ts = datetime.now()
+        self.session.commit()
+
+    def get_recent(self, days: int = 7) -> List[RepoDB]:
+        """Return repos seen in the last N days, ordered by stars desc."""
+        from datetime import date, timedelta
+        cutoff = (date.today() - timedelta(days=days)).isoformat()
+        return (
+            self.session.query(RepoDB)
+            .filter(RepoDB.last_seen_date >= cutoff)
+            .order_by(desc(RepoDB.stars))
+            .all()
+        )
+
+    def get_by_date(self, date_str: str) -> List[RepoDB]:
+        """Return repos first seen on a specific date."""
+        return (
+            self.session.query(RepoDB)
+            .filter(RepoDB.first_seen_date == date_str)
+            .order_by(desc(RepoDB.stars))
+            .all()
+        )
+
+    def get_all_analyzed_names(self) -> set:
+        """Return a set of full_name strings for all repos that have been LLM-analyzed."""
+        rows = (
+            self.session.query(RepoDB.full_name)
+            .filter(RepoDB.analyzed == True, RepoDB.one_liner != None)  # noqa: E712
+            .all()
+        )
+        return {row[0] for row in rows}
+
+
+class OfficialItemRepository:
+    """官方动态跟踪数据仓库"""
+
+    def __init__(self, session: Session):
+        self.session = session
+
+    def get_by_slug(self, slug: str) -> Optional[OfficialItemDB]:
+        return self.session.query(OfficialItemDB).filter_by(slug=slug).first()
+
+    def get_all_known_slugs(self) -> dict[str, Optional[str]]:
+        """返回 {slug: sitemap_lastmod} 用于增量对比"""
+        rows = self.session.query(OfficialItemDB.slug, OfficialItemDB.sitemap_lastmod).all()
+        return {row[0]: row[1] for row in rows}
+
+    def upsert_discovered(self, slug: str, url: str, title: str, date: str,
+                          category: str, item_type: str, summary: str,
+                          sitemap_lastmod: Optional[str], today: str) -> OfficialItemDB:
+        """发现新条目时插入或更新 last_seen_date"""
+        existing = self.get_by_slug(slug)
+        if existing:
+            existing.last_seen_date = today
+            if sitemap_lastmod and sitemap_lastmod != existing.sitemap_lastmod:
+                existing.sitemap_lastmod = sitemap_lastmod
+                existing.analyzed = False  # 内容更新后重新分析
+        else:
+            existing = OfficialItemDB(
+                source=slug.split(":")[0],  # 格式 "source:actual_slug"
+                slug=slug, url=url, title=title, date=date,
+                category=category, item_type=item_type, summary=summary,
+                sitemap_lastmod=sitemap_lastmod,
+                first_seen_date=today, last_seen_date=today, analyzed=False,
+            )
+            self.session.add(existing)
+        self.session.commit()
+        self.session.refresh(existing)
+        return existing
+
+    def upsert_batch(self, items: list[dict], today: str) -> list[OfficialItemDB]:
+        """批量 upsert，items 为 dict 列表"""
+        results = []
+        for item in items:
+            result = self.upsert_discovered(
+                slug=item["slug"], url=item["url"], title=item.get("title", ""),
+                date=item.get("date", ""), category=item.get("category", ""),
+                item_type=item.get("item_type", "article"),
+                summary=item.get("summary", ""),
+                sitemap_lastmod=item.get("sitemap_lastmod"), today=today,
+            )
+            results.append(result)
+        return results
+
+    def save_scraped_content(self, slug: str, title: str, date: str,
+                             category: str, summary: str, content: str) -> None:
+        """保存抓取的文章内容"""
+        item = self.get_by_slug(slug)
+        if not item:
+            return
+        item.title = title or item.title
+        item.date = date or item.date
+        item.category = category or item.category
+        item.summary = summary or item.summary
+        item.content = content
+        self.session.commit()
+
+    def save_analysis(self, slug: str, analysis) -> None:
+        """保存 LLM 分析结果"""
+        item = self.get_by_slug(slug)
+        if not item:
+            return
+        item.one_liner = analysis.one_liner
+        item.summary_cn = analysis.summary_cn
+        item.core_insight = analysis.core_insight
+        item.ecommerce_connection = analysis.ecommerce_connection
+        item.relevance = analysis.relevance
+        item.analyzed = True
+        self.session.commit()
+
+    def get_all_analyzed_slugs(self) -> set[str]:
+        """返回已分析过的 slug 集合"""
+        rows = (
+            self.session.query(OfficialItemDB.slug)
+            .filter(OfficialItemDB.analyzed == True, OfficialItemDB.one_liner != None)  # noqa: E712
+            .all()
+        )
+        return {row[0] for row in rows}
+
+    def get_cached_analysis(self, slug: str):
+        """从 DB 获取已缓存的分析结果，返回 (source, item)"""
+        return self.get_by_slug(slug)
+
+
+class BlogPostRepository:
+    """独立博客订阅数据仓库"""
+
+    def __init__(self, session: Session):
+        self.session = session
+
+    def get_by_slug(self, slug: str) -> Optional[BlogPostDB]:
+        return self.session.query(BlogPostDB).filter_by(slug=slug).first()
+
+    def get_all_known_slugs(self) -> set[str]:
+        """返回已知 slug 集合"""
+        rows = self.session.query(BlogPostDB.slug).all()
+        return {row[0] for row in rows}
+
+    def upsert_discovered(self, slug: str, url: str, title: str, date: str,
+                          source_label: str, summary: str, today: str) -> BlogPostDB:
+        """发现新博文时插入"""
+        existing = self.get_by_slug(slug)
+        if existing:
+            existing.last_seen_date = today
+        else:
+            existing = BlogPostDB(
+                source=slug.split(":")[0],
+                slug=slug, url=url, title=title, date=date,
+                source_label=source_label, summary=summary,
+                first_seen_date=today, last_seen_date=today, analyzed=False,
+            )
+            self.session.add(existing)
+        self.session.commit()
+        self.session.refresh(existing)
+        return existing
+
+    def save_scraped_content(self, slug: str, content: str) -> None:
+        """保存博客正文内容"""
+        post = self.get_by_slug(slug)
+        if post:
+            post.content = content
+            self.session.commit()
+
+    def save_analysis(self, slug: str, analysis) -> None:
+        """保存 LLM 分析结果"""
+        post = self.get_by_slug(slug)
+        if not post:
+            return
+        post.one_liner = analysis.one_liner
+        post.summary_cn = analysis.summary_cn
+        post.ecommerce_connection = analysis.ecommerce_connection
+        post.relevance = analysis.relevance
+        post.analyzed = True
+        self.session.commit()
+
+    def get_all_analyzed_slugs(self) -> set[str]:
+        """返回已分析过的 slug 集合"""
+        rows = (
+            self.session.query(BlogPostDB.slug)
+            .filter(BlogPostDB.analyzed == True, BlogPostDB.one_liner != None)  # noqa: E712
+            .all()
+        )
+        return {row[0] for row in rows}
